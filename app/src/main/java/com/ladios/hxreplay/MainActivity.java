@@ -30,9 +30,23 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        // 回前台通知网页合并后台 buffer（网页另监听 visibilitychange 双保险）。
+        if (web != null) {
+            web.evaluateJavascript("window.dispatchEvent(new Event('hxresume'));", null);
+        }
+    }
+
+    @Override
     public void onBackPressed() {
         if (web.canGoBack()) web.goBack();
         else super.onBackPressed();
+    }
+
+    // 桥接层子线程回调网页用：切回主线程执行 evaluateJavascript。
+    public void runOnWeb(final String js) {
+        runOnUiThread(() -> { if (web != null) web.evaluateJavascript(js, null); });
     }
 }
 

@@ -28,7 +28,7 @@ const EN = {
   'decaid 杯流': 'decaid flow', 'RAW dW/dt': 'RAW dW/dt', '插件累计': 'plugin cum.', '机器流量': 'machine flow', '目标指令': 'target cmd', '▲ 写入': '▲ write',
   '无帧数据（仅事件/轨迹）': 'No frames (events/trace only)', '调流·': 'trim·', '调流轨迹': 'trim trace', '事件': 'event', '名称': 'Name',
   '载入中…': 'Loading…', '空': 'empty', '杯': 'shots', '杯有全点': 'with full data', '更新': 'updated',
-  '仅事件': 'events only', '帧': 'frames', '采样': 'samples', '结果': 'Result', '插件': 'plugin',
+  '帧': 'frames', '采样': 'samples', '结果': 'Result', '插件': 'plugin',
   '失败：请填 Decaid 导出地址': 'Failed: enter the Decaid export URL', '抓取中…': 'Fetching…',
   '自动抓取失败：': 'Auto fetch failed: ', '失败：': 'Failed: ', '新增': 'new', '补全': 'backfilled',
   '就绪': 'Ready', '归档为空，先抓取或导入': 'archive empty; fetch or import first',
@@ -41,6 +41,21 @@ const EN = {
   '归档已达': 'Archive reached', '，建议压缩备份后清理。': '; compress a backup, then trim.',
   '压缩中…': 'Compressing…', '已导出': 'Exported', '已清理最旧': 'Trimmed oldest', '杯': 'shots',
   '分享不可用（浏览器环境请用导出）': 'Share unavailable (use export in browser)',
+  '后台抓取未在白名单': 'Background fetch not whitelisted',
+  '可能被系统杀掉，后台抓取会停。': 'may be killed by the system; background fetch will stop.',
+  '去设置白名单': 'Open whitelist settings',
+  '后台已攒': 'Background buffered',
+  '杯 · 上次抓取': 'shots · last fetch',
+  '从未': 'never',
+  '完成': 'completed', '中止': 'aborted',
+  '检测到': 'Detected', '支插件未安装': 'plugin(s) not installed',
+  '两支都装上，才能记全每一杯曲线。': 'Install both plugins to capture every shot curve.',
+  '已安装': 'Installed', '未安装': 'Not installed', '未检测到': 'Not detected',
+  '记录 HyperEx 控制的萃取杯': 'Records HyperEx-controlled shots',
+  '记录其余曲线（非 HyperEx 杯）': 'Records all other curves (non-HyperEx shots)',
+  '去 GitHub 安装': 'Install from GitHub',
+  '稍后': 'Later', '重新检测': 'Re-check', '检测中…': 'Checking…',
+  '插件检测失败：无法连接 Decaid': 'Plugin check failed: cannot reach Decaid',
 };
 function t(s) { return lang === 'en' && EN[s] != null ? EN[s] : s; }
 function applyLang() {
@@ -98,12 +113,40 @@ let lastStatus = null;
 function setStatus(msg, busy) { lastStatus = { fn: typeof msg === 'function' ? msg : () => msg, busy: !!busy }; renderStatus(); }
 function renderStatus() { if (!lastStatus) return; $('status').textContent = lastStatus.fn(); $('status').classList.toggle('busy', lastStatus.busy); }
 function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// 选杯列表标签：时间 · 曲线标题 · 状态。HyperEx 杯统一 "HyperEx Pulse Filter (mode)"，
+// mode 取 releaseMode（auto/on/off），老数据没有该字段就按标题的 auto 后缀认，再老默认 on；
+// recorder 杯（runId pr- 前缀）显示它记录的真实曲线名 profileTitle。
+function cupTitle(s) {
+  if (String(s.runId || '').startsWith('pr-')) return s.profileTitle || 'Profile Recorder';
+  const mode = s.releaseMode || (/ auto$/i.test(String((s.workflowProfileCommands || {}).title || '')) ? 'auto' : 'on');
+  return 'HyperEx Pulse Filter (' + mode + ')';
+}
+function cupStatusLabel(result) {
+  const r = String(result || '');
+  if (/aborted|abort/i.test(r)) return t('中止');
+  if (/completed/i.test(r)) return t('完成');
+  return r;
+}
+function cupOptionLabel(c) {
+  const d = new Date(c.startedAt);
+  const when = Number.isFinite(d.getTime()) ? (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
+  const parts = [when, c.title, cupStatusLabel(c.result)].filter(Boolean);
+  return escapeHtml(parts.join(' · '));
+}
 
 // ---- 归档与取数 ----
 async function saveArchive() { await dbSet('archive', archive); renderArchiveInfo(); }
 function renderArchiveInfo() {
   if (!archive) { $('archiveInfo').textContent = t('空'); return; }
-  $('archiveInfo').textContent = archive.count + ' ' + t('杯') + ' · ' + archive.fullRecordCount + ' ' + t('杯有全点') + ' · ' + t('更新') + ' ' + (archive.updatedAt || '').replace('T', ' ').slice(0, 19);
+  let line = archive.count + ' ' + t('杯') + ' · ' + archive.fullRecordCount + ' ' + t('杯有全点') + ' · ' + t('更新') + ' ' + (archive.updatedAt || '').replace('T', ' ').slice(0, 19);
+  if (window.HxBridge && window.HxBridge.fetchStatus) {
+    try {
+      const fs = JSON.parse(window.HxBridge.fetchStatus());
+      const when = fs.lastFetchAt ? new Date(fs.lastFetchAt).toLocaleString() : t('从未');
+      line += '\n' + t('后台已攒') + ' ' + fs.bufferCups + ' ' + t('杯 · 上次抓取') + ' ' + when;
+    } catch (e) {}
+  }
+  $('archiveInfo').textContent = line;
 }
 async function mergeIncoming(json, label) {
   const res = HxArchive.merge(archive || HxArchive.emptyArchive(), json, MAX_SHOTS);
@@ -226,20 +269,16 @@ function rebuildCupList() {
     const sm = (fr.samples || []).length;
     const ev = (fr.events || []).length;
     const tr = fr.liveFlowTrim && (fr.liveFlowTrim.trace || []).length || 0;
-    return { index: i, runId: s.runId, startedAt: s.startedAt, result: s.result, raw, samples: sm, events: ev, trace: tr, playable: raw + sm > 0 };
-  }).filter((c) => c.playable || c.events + c.trace > 0);
+    return { index: i, runId: s.runId, startedAt: s.startedAt, result: s.result, title: cupTitle(s), raw, samples: sm, events: ev, trace: tr, playable: raw + sm > 0 };
+  }).filter((c) => c.playable || c.events + c.trace > 0)
+    .sort((a, b) => (Date.parse(b.startedAt) || 0) - (Date.parse(a.startedAt) || 0));
   const sel = $('cup');
   const prev = sel.value;
-  sel.innerHTML = cups.map((c) => {
-    const d = new Date(c.startedAt);
-    const when = Number.isFinite(d.getTime()) ? (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
-    const tag = c.playable ? (c.raw ? c.raw + ' ' + t('帧') : c.samples + ' ' + t('采样')) : t('仅事件');
-    return '<option value="' + c.index + '">' + when + ' · ' + tag + ' · ' + (c.result || '') + '</option>';
-  }).join('');
+  sel.innerHTML = cups.map((c) => '<option value="' + c.index + '">' + cupOptionLabel(c) + '</option>').join('');
   if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
   else if (cups.length) {
-    const lastPlayable = cups.map((c, i) => c.playable ? i : -1).filter((i) => i >= 0).pop();
-    sel.value = String(cups[lastPlayable != null ? lastPlayable : 0].index);
+    const newestPlayable = cups.find((c) => c.playable);
+    sel.value = String((newestPlayable || cups[0]).index);
   }
   if (cups.length) loadCup(Number(sel.value));
 }
@@ -276,12 +315,7 @@ function loadCup(index) {
 function rebuildCupListLabels() {
   const sel = $('cup');
   const cur = sel.value;
-  sel.innerHTML = cups.map((c) => {
-    const d = new Date(c.startedAt);
-    const when = Number.isFinite(d.getTime()) ? (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
-    const tag = c.playable ? (c.raw ? c.raw + ' ' + t('帧') : c.samples + ' ' + t('采样')) : t('仅事件');
-    return '<option value="' + c.index + '">' + when + ' · ' + tag + ' · ' + (c.result || '') + '</option>';
-  }).join('');
+  sel.innerHTML = cups.map((c) => '<option value="' + c.index + '">' + cupOptionLabel(c) + '</option>').join('');
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
 }
 
@@ -497,6 +531,24 @@ function buildCharts() {
       yMin = Math.min(yMin, v); yMax = Math.max(yMax, v);
     }
     if (!Number.isFinite(yMin)) { yMin = 0; yMax = 1; }
+    // RAW 差分有孤立尖峰（秤时间戳量化）：只约束 RAW 线——轴按其 p99 定，画时跳过突变值
+    let rawCap = Infinity;
+    const rawLine = lines.find((l) => l.label === 'RAW dW/dt');
+    if (rawLine) {
+      const rv = [];
+      for (const f of frames) { const v = rawLine.get(f); if (v != null && Number.isFinite(v)) rv.push(v); }
+      if (rv.length > 20) {
+        rv.sort((a, b) => a - b);
+        rawCap = rv[Math.floor((rv.length - 1) * 0.99)];
+        yMax = -Infinity;
+        for (const ln of lines) for (const f of frames) {
+          let v = ln.get(f);
+          if (v == null || !Number.isFinite(v)) continue;
+          if (ln === rawLine) v = Math.min(v, rawCap);
+          yMax = Math.max(yMax, v);
+        }
+      }
+    }
     if (!frames.length) { ctx.fillStyle = '#7d8592'; ctx.font = '12px sans-serif'; ctx.fillText(t('无帧数据（仅事件/轨迹）'), w / 2 - 78, h / 2); }
     if (yMin > 0) yMin = 0;
     const span = Math.max(0.5, yMax - yMin);
@@ -521,15 +573,17 @@ function buildCharts() {
     for (const ln of lines) {
       ctx.strokeStyle = ln.color; ctx.lineWidth = ln.width || 1.5;
       ctx.setLineDash(ln.dash || []);
+      ctx.save(); ctx.beginPath(); ctx.rect(pad.l, pad.t, w - pad.l - pad.r, h - pad.t - pad.b); ctx.clip();
       ctx.beginPath();
       let started = false;
       for (let i = 0; i < frames.length; i++) {
         const v = ln.get(frames[i]);
-        if (v == null || !Number.isFinite(v)) { started = false; continue; }
+        if (v == null || !Number.isFinite(v) || (ln === rawLine && v > rawCap)) { started = false; continue; }
         const px = x(frameTimes[i] / 1000), py = y(v);
         if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
       }
       ctx.stroke(); ctx.setLineDash([]);
+      ctx.restore();
     }
     ctx.font = '10px sans-serif';
     let lx = pad.l + 4;
@@ -543,7 +597,7 @@ function buildCharts() {
       }
       ctx.fillText(t('▲ 写入'), lx, pad.t + 9);
     }
-    chartGeo.push({ canvas, ctx, def: view, x, y, w, h, pad, dpr });
+    chartGeo.push({ canvas, ctx, def: view, x, y, w, h, pad, dpr, yMin, yMax });
   }
   chartsReady = true;
   for (const g of chartGeo) {
@@ -653,6 +707,148 @@ document.addEventListener('keydown', (ev) => {
 let resizeTimer = 0;
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (cup) { buildCharts(); chartBase = []; paint(); } }, 150); });
 
+// ---- 图表卡长按拖动排序（⠿ 把手；顺序持久化）----
+const CHART_IDS = ['cFlow', 'cWeight', 'cPress'];
+function chartBoxes() { return CHART_IDS.map((id) => document.querySelector('.chartbox[data-chart="' + id + '"]')).filter(Boolean); }
+function applyChartOrder(order) {
+  const view = document.querySelector('section.view');
+  const log = $('log');
+  const boxes = chartBoxes();
+  const byId = {};
+  boxes.forEach((b) => { byId[b.dataset.chart] = b; });
+  const seq = (Array.isArray(order) ? order : []).filter((id) => byId[id]);
+  CHART_IDS.forEach((id) => { if (!seq.includes(id)) seq.push(id); });
+  seq.forEach((id) => view.insertBefore(byId[id], log));
+}
+function saveChartOrder() {
+  const order = [...document.querySelectorAll('section.view .chartbox[data-chart]')].map((b) => b.dataset.chart);
+  dbSet('chartOrder', order);
+}
+function initChartDrag() {
+  const view = document.querySelector('section.view');
+  let drag = null;
+  const arm = (handle, ev) => {
+    if (drag || (ev.button != null && ev.button !== 0)) return;
+    const box = handle.closest('.chartbox');
+    const x0 = ev.clientX, y0 = ev.clientY;
+    const timer = setTimeout(() => begin(box, handle, x0, y0), 350);
+    const cancel = () => { clearTimeout(timer); handle.removeEventListener('pointermove', preMove); handle.removeEventListener('pointerup', cancel); handle.removeEventListener('pointercancel', cancel); };
+    const preMove = (e) => { if (Math.hypot(e.clientX - x0, e.clientY - y0) > 8) cancel(); };
+    handle.addEventListener('pointermove', preMove);
+    handle.addEventListener('pointerup', cancel);
+    handle.addEventListener('pointercancel', cancel);
+    handle.addEventListener('pointerdown', (e) => { if (drag) e.preventDefault(); }, { once: true });
+  };
+  const begin = (box, handle, x0, y0) => {
+    const rect = box.getBoundingClientRect();
+    const ghost = box.cloneNode(true);
+    ghost.classList.add('chartghost');
+    ghost.style.width = rect.width + 'px';
+    document.body.appendChild(ghost);
+    box.classList.add('dragging');
+    document.body.classList.add('chart-dragging');
+    drag = { box, ghost, dx: x0 - rect.left, dy: y0 - rect.top, target: null };
+    moveGhost(x0, y0);
+    if (navigator.vibrate) navigator.vibrate(10);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
+  const moveGhost = (x, y) => { drag.ghost.style.transform = 'translate(' + (x - drag.dx) + 'px,' + (y - drag.dy) + 'px)'; };
+  const onMove = (e) => {
+    if (!drag) return;
+    e.preventDefault();
+    moveGhost(e.clientX, e.clientY);
+    const boxes = chartBoxes().filter((b) => b !== drag.box);
+    let target = null;
+    for (const b of boxes) {
+      const r = b.getBoundingClientRect();
+      if (e.clientY >= r.top && e.clientY <= r.bottom) { target = { el: b, before: e.clientY < r.top + r.height / 2 }; break; }
+    }
+    if (!target && boxes.length) {
+      const first = boxes[0].getBoundingClientRect(), last = boxes[boxes.length - 1].getBoundingClientRect();
+      if (e.clientY < first.top) target = { el: boxes[0], before: true };
+      else if (e.clientY > last.bottom) target = { el: boxes[boxes.length - 1], before: false };
+    }
+    chartBoxes().forEach((b) => b.classList.remove('drop-target'));
+    if (target) {
+      target.el.classList.add('drop-target');
+      view.insertBefore(drag.box, target.before ? target.el : target.el.nextSibling);
+    }
+    drag.target = target;
+    const vr = view.getBoundingClientRect();
+    if (e.clientY < vr.top + 40) view.scrollTop -= 8;
+    else if (e.clientY > vr.bottom - 40) view.scrollTop += 8;
+  };
+  const onUp = () => {
+    if (!drag) return;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    drag.ghost.remove();
+    drag.box.classList.remove('dragging');
+    document.body.classList.remove('chart-dragging');
+    chartBoxes().forEach((b) => b.classList.remove('drop-target'));
+    drag = null;
+    saveChartOrder();
+    if (cup) { buildCharts(); chartBase = []; paint(); }
+  };
+  document.querySelectorAll('.charthandle').forEach((h) => {
+    h.addEventListener('pointerdown', (ev) => arm(h, ev));
+    h.addEventListener('contextmenu', (ev) => ev.preventDefault());
+  });
+}
+
+// ---- 后台 buffer 合并（冷启动 / 回前台都走这里）----
+let mergingPending = false;
+async function mergePending() {
+  if (!window.HxBridge || mergingPending) return;
+  mergingPending = true;
+  try {
+    const pending = window.HxBridge.takePending();
+    if (pending) {
+      // buffer 是归档形状 {kind:HyperExHistoryArchive,shots}；兼容旧 {hyperex,recorder} 与单份导出。
+      let st = { newShots: 0, fullUpdated: 0 };
+      const parsed = JSON.parse(pending);
+      if (parsed && (parsed.hyperex || parsed.recorder)) {
+        if (parsed.hyperex) { const r = await mergeIncoming(parsed.hyperex, 'background'); st.newShots += r.newShots; st.fullUpdated += r.fullUpdated; }
+        if (parsed.recorder) { const r = await mergeIncoming(parsed.recorder, 'background-recorder'); st.newShots += r.newShots; st.fullUpdated += r.fullUpdated; }
+      } else {
+        st = await mergeIncoming(parsed, 'background');
+      }
+      if (st.newShots || st.fullUpdated) {
+        setStatus(() => t('后台抓取已合并 · 新增') + ' ' + st.newShots + ' ' + t('杯') + ' · ' + t('补全') + ' ' + st.fullUpdated + ' ' + t('杯'));
+      }
+      await checkArchiveSize();
+    }
+  } catch (e) { /* 后台数据坏了就跳过，不影响手动抓取 */ }
+  mergingPending = false;
+  renderWhitelistWarning();
+}
+
+// ---- 白名单警示：不在电池优化白名单就提示，一键跳设置 ----
+function renderWhitelistWarning() {
+  let bar = $('whitelistBar');
+  if (!window.HxBridge || !window.HxBridge.isIgnoringBatteryOptimizations) { if (bar) bar.remove(); return; }
+  const ok = window.HxBridge.isIgnoringBatteryOptimizations();
+  if (ok) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'whitelistBar';
+    bar.style.cssText = 'flex:none;background:#3d2c17;color:#f5c078;padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #5a4326';
+    const msg = document.createElement('span');
+    msg.style.flex = '1';
+    msg.textContent = t('后台抓取未在白名单') + '，' + t('可能被系统杀掉，后台抓取会停。');
+    const btn = document.createElement('button');
+    btn.textContent = t('去设置白名单');
+    btn.style.cssText = 'background:#e8833a;color:#1a1208;padding:6px 12px;font-size:13px;width:auto;margin:0';
+    btn.addEventListener('click', () => window.HxBridge.openBatterySettings());
+    bar.appendChild(msg); bar.appendChild(btn);
+    const main = document.querySelector('main');
+    document.body.insertBefore(bar, main);
+  }
+}
+
 // ---- 启动 ----
 (async () => {
   await openDb();
@@ -663,30 +859,87 @@ window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer
   if (savedSec) $('autoSec').value = savedSec;
   const savedLang = await dbGet('lang');
   if (savedLang === 'en' || savedLang === 'zh') { lang = savedLang; $('lang').value = lang; }
-  // APK 后台服务抓回的原始导出：打开 App 时合并进归档
+  applyChartOrder(await dbGet('chartOrder'));
+  initChartDrag();
   if (window.HxBridge) {
-    try {
-      const pending = window.HxBridge.takePending();
-      if (pending) {
-        // 新格式 {hyperex, recorder}；旧格式是单份导出 JSON，兼容。
-        let st = { newShots: 0, fullUpdated: 0 };
-        const parsed = JSON.parse(pending);
-        if (parsed && (parsed.hyperex || parsed.recorder)) {
-          if (parsed.hyperex) { const r = await mergeIncoming(parsed.hyperex, 'background'); st.newShots += r.newShots; st.fullUpdated += r.fullUpdated; }
-          if (parsed.recorder) { const r = await mergeIncoming(parsed.recorder, 'background-recorder'); st.newShots += r.newShots; st.fullUpdated += r.fullUpdated; }
-        } else {
-          st = await mergeIncoming(parsed, 'background');
-        }
-        setStatus(() => t('后台抓取已合并 · 新增') + ' ' + st.newShots + ' ' + t('杯') + ' · ' + t('补全') + ' ' + st.fullUpdated + ' ' + t('杯'));
-        await checkArchiveSize();
-      }
-    } catch (e) { /* 后台数据坏了就跳过，不影响手动抓取 */ }
+    await mergePending();
     window.HxBridge.setAutoFetch($('srcUrl').value.trim(), $('autoOn').checked ? Number($('autoSec').value) : 0);
+    // 回前台自动合并：MainActivity.onResume 发 hxresume，visibilitychange 双保险。
+    window.addEventListener('hxresume', () => { mergePending(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) mergePending(); });
   }
   renderArchiveInfo();
   rebuildCupList();
   if (await dbGet('autoOn')) { $('autoOn').checked = true; startAuto(); }
   applyLang();
-  setStatus(() => archive.count ? t('就绪') + ' · ' + t('归档') + ' ' + archive.count + ' ' + t('杯') : t('就绪') + ' · ' + t('归档为空，先抓取或导入'));
+  renderWhitelistWarning();
+  renderReadyStatus();
+  checkPluginsOnStartup();
 })().catch((e) => setStatus(() => t('初始化失败：') + (e.message || e)));
+
+// ---- 插件安装检测：启动静默查一次，缺任一支弹窗引导去 GitHub 安装 ----
+const PLUGIN_DEFS = [
+  { id: 'decenthyperexplugin.reaplugin', name: 'HyperEx Pulse Filter', cls: 'hx', ico: 'H', repo: 'ladiosupp/decenthyperexplugin', desc: '记录 HyperEx 控制的萃取杯' },
+  { id: 'profilerecorder.reaplugin', name: 'Profile Recorder', cls: 'rc', ico: 'R', repo: 'ladiosupp/profilerecorder', desc: '记录其余曲线（非 HyperEx 杯）' },
+];
+let pluginCheckBusy = false;
+window.__hxPluginCheck = function (payload) {
+  pluginCheckBusy = false;
+  let res;
+  try { res = JSON.parse(payload); } catch (_) { res = { ok: false, error: 'bad payload' }; }
+  if (!res.ok) {
+    closePluginModal();
+    setStatus(() => t('插件检测失败：无法连接 Decaid'), true);
+    return;
+  }
+  const found = {};
+  for (const p of res.plugins || []) found[p.id] = p;
+  const missing = PLUGIN_DEFS.filter((d) => !found[d.id] || found[d.id].loaded === false);
+  if (!missing.length) { closePluginModal(); renderReadyStatus(); return; }
+  showPluginModal(found, missing);
+};
+function renderReadyStatus() {
+  setStatus(() => archive && archive.count ? t('就绪') + ' · ' + t('归档') + ' ' + archive.count + ' ' + t('杯') : t('就绪') + ' · ' + t('归档为空，先抓取或导入'));
+}
+function checkPluginsOnStartup() {
+  const url = $('srcUrl').value.trim();
+  if (!url || pluginCheckBusy) return;
+  pluginCheckBusy = true;
+  setStatus(() => t('检测中…'), true);
+  if (window.HxBridge && window.HxBridge.checkPlugins) {
+    window.HxBridge.checkPlugins(url, '__hxPluginCheck');
+  } else {
+    // 浏览器环境没有 Java 桥：直接 fetch（Decaid 无 CORS 头，跨域会失败，按不可达处理）。
+    fetch(new URL('/api/v1/plugins', url).href, { cache: 'no-store' })
+      .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then((plugins) => window.__hxPluginCheck(JSON.stringify({ ok: true, plugins })))
+      .catch((e) => window.__hxPluginCheck(JSON.stringify({ ok: false, error: String(e && e.message || e) })));
+  }
+}
+function closePluginModal() {
+  const m = $('pluginModal');
+  if (m) m.remove();
+}
+function showPluginModal(found, missing) {
+  closePluginModal();
+  const dim = document.createElement('div');
+  dim.id = 'pluginModal';
+  dim.className = 'modal-dim';
+  const rows = PLUGIN_DEFS.map((d) => {
+    const p = found[d.id];
+    const ok = p && p.loaded !== false;
+    const ver = ok ? 'v' + (p.version || '?') + ' · ' + t('已安装') : t('未检测到');
+    return '<div class="plug ' + d.cls + '"><span class="ico">' + d.ico + '</span><span><span class="nm">' + d.name + '</span><div class="ver">' + ver + '</div><div class="desc">' + t(d.desc) + '</div></span><span class="badge ' + (ok ? 'ok' : 'no') + '">' + t(ok ? '已安装' : '未安装') + '</span></div>';
+  }).join('');
+  const ghBtns = missing.map((d) => '<button class="ghbtn" data-repo="' + d.repo + '">' + t('去 GitHub 安装') + ' ' + d.name + '<small>' + d.repo + '</small></button>').join('');
+  dim.innerHTML = '<div class="modal"><h3>' + t('检测到') + ' ' + missing.length + ' ' + t('支插件未安装') + '</h3><p class="why">' + t('两支都装上，才能记全每一杯曲线。') + '</p>' + rows + ghBtns +
+    '<div class="modal-actions"><button class="ghost" id="pluginLater">' + t('稍后') + '</button><button class="primary" id="pluginRecheck">' + t('重新检测') + '</button></div>' +
+    '<div class="modal-foot">Decaid → Plugins → Install plugin → GitHub Release</div></div>';
+  document.body.appendChild(dim);
+  dim.querySelectorAll('.ghbtn').forEach((b) => b.addEventListener('click', () => {
+    if (window.HxBridge && window.HxBridge.openUrl) window.HxBridge.openUrl('https://github.com/' + b.dataset.repo + '/releases');
+  }));
+  $('pluginLater').addEventListener('click', closePluginModal);
+  $('pluginRecheck').addEventListener('click', () => { closePluginModal(); checkPluginsOnStartup(); });
+}
 
