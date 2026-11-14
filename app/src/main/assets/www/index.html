@@ -10,14 +10,23 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%}
 body{background:#121418;color:#e8eaee;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;display:flex;flex-direction:column;overflow:hidden}
-header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid #262a31;background:#171a1f;flex:none}
+header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid #262a31;background:#171a1f;flex:none;min-width:0}
 h1{font-size:17px;margin:0;letter-spacing:.02em}
-header .status{margin-left:auto;font-size:12px;color:#9fd4a8;text-align:right}
+header .status{margin-left:auto;font-size:12px;color:#9fd4a8;text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 header .status.busy{color:#e9c276}
+.fetchbtn{flex:none;display:inline-flex;align-items:center;gap:7px;background:#e8833a;color:#1a1208;border:0;border-radius:9px;padding:7px 13px;font-size:13px;font-weight:700;cursor:pointer;transition:filter .12s,transform .08s;white-space:nowrap}
+.fetchbtn:hover{filter:brightness(1.08)}
+.fetchbtn:active{transform:scale(.96)}
+.fetchbtn .fetch-count{font:11px ui-monospace,monospace;font-weight:600;background:rgba(26,18,8,.18);border-radius:6px;padding:1px 6px;min-width:34px;text-align:center}
+.fetchbtn.busy{filter:saturate(.7) brightness(.92);cursor:default}
+.fetchbtn.busy .fetch-ico{display:inline-block;animation:fetchspin 1s linear infinite}
+@keyframes fetchspin{to{transform:rotate(360deg)}}
+@media (max-width:600px){header{gap:8px;padding:10px 12px}h1{font-size:15px}.fetchbtn{padding:6px 10px;font-size:12px}.fetchbtn .fetch-count{min-width:30px}}
+@media (max-width:480px){header h1{display:none}header .status{font-size:11px}.fetchbtn{padding:6px 9px;font-size:12px;gap:5px}}
 main{flex:1;display:flex;min-height:0}
-aside{width:340px;flex:none;border-right:1px solid #262a31;padding:14px;overflow-y:auto}
+aside{width:340px;flex:none;border-right:1px solid #262a31;padding:14px;overflow-y:auto;overflow-x:hidden}
 section.view{flex:1;min-width:0;padding:14px 16px;overflow-y:auto;display:flex;flex-direction:column}
-fieldset{border:1px solid #2b3038;border-radius:10px;margin:0 0 12px;padding:10px 12px}
+fieldset{border:1px solid #2b3038;border-radius:10px;margin:0 0 12px;padding:10px 12px;min-width:0}
 legend{font-size:11px;letter-spacing:.08em;color:#8b93a1;padding:0 4px}
 label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0;font-size:13px;color:#c6ccd6}
 input[type=text],input[type=url]{width:100%;background:#0e1116;color:#e8eaee;border:1px solid #333a44;border-radius:8px;padding:9px 10px;font:13px ui-monospace,monospace}
@@ -28,6 +37,30 @@ button:not(:disabled):active{transform:scale(.97)}
 button:disabled{opacity:.5;cursor:default}
 button.primary{background:#e8833a;color:#1a1208;width:100%;margin-top:6px}
 button.ghost{width:100%;margin-top:8px}
+.cupdrop{position:relative}
+.cupdrop-btn{display:flex;align-items:center;gap:8px;width:100%;background:#0e1116;color:#e8eaee;border:1px solid #333a44;border-radius:8px;padding:9px 10px;font:13px ui-monospace,monospace;text-align:left;cursor:pointer}
+.cupdrop-btn .cupdrop-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cupdrop-btn .cupdrop-arrow{flex:none;color:#8b93a1;font-size:11px;transition:transform .15s}
+.cupdrop.open .cupdrop-btn{border-color:#e8833a}
+.cupdrop.open .cupdrop-arrow{transform:rotate(180deg)}
+.cupdrop-panel{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;background:#14171c;border:1px solid #333a44;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.55);max-height:300px;overflow-y:auto;overscroll-behavior:contain;padding:4px}
+.cupdrop-panel::-webkit-scrollbar{width:10px}
+.cupdrop-panel::-webkit-scrollbar-track{background:#0e1116;border-radius:5px}
+.cupdrop-panel::-webkit-scrollbar-thumb{background:#3a4150;border-radius:5px;border:2px solid #0e1116}
+.cupdrop-panel::-webkit-scrollbar-thumb:hover{background:#4a5264}
+.cupdrop-panel{scrollbar-width:thin;scrollbar-color:#3a4150 #0e1116}
+.cupdrop-item{padding:8px 10px;border-radius:7px;font:12px ui-monospace,monospace;color:#c6ccd6;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cupdrop-item:hover{background:#222732}
+.cupdrop-item.sel{background:#2c3442;color:#e8eaee;box-shadow:inset 3px 0 0 #e8833a}
+.cupdrop-item.sel{white-space:normal;overflow:visible;text-overflow:clip;word-break:break-word}
+.cupdrop-item.bad{background:#2a1518;color:#e09aa2}
+.cupdrop-item.bad:hover{background:#33191d}
+.cupdrop-item.bad.sel{background:#33191d;color:#f2b8be;box-shadow:inset 3px 0 0 #c96470}
+.cupdrop.compact{flex:none}
+.cupdrop.compact .cupdrop-btn{width:auto;padding:8px 10px;font-size:13px}
+.cupdrop.compact .cupdrop-panel{left:auto;right:0;min-width:110px;max-height:260px}
+.cupdrop.compact .cupdrop-item{text-align:right}
+.cupdrop.compact .cupdrop-item.sel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .note{font-size:12px;color:#8b93a1;margin:8px 0 0}
 .cards{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:12px;flex:none}
 .card{background:#191d23;border:1px solid #2a2f38;border-radius:10px;padding:8px 10px;min-width:0;container-type:inline-size}
@@ -44,7 +77,7 @@ button.ghost{width:100%;margin-top:8px}
 .chartbox.drop-target{border-color:#e8833a;box-shadow:0 0 0 1px rgba(232,131,58,.4)}
 .chartghost{position:fixed;left:0;top:0;z-index:99;margin:0;pointer-events:none;opacity:.92;border-color:#e8833a;box-shadow:0 10px 30px rgba(0,0,0,.55);will-change:transform}
 body.chart-dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
-canvas{width:100%;height:150px;display:block;touch-action:none}
+canvas{width:100%;height:150px;display:block;touch-action:pan-y}
 .events{background:#171a1f;border:1px solid #262a31;border-radius:10px;padding:8px 10px;font:12px ui-monospace,monospace;color:#aeb6c2;max-height:220px;overflow:auto;flex:none}
 .events .row{display:flex;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer;white-space:nowrap}
 .events .row:hover{background:#222732}
@@ -55,13 +88,13 @@ canvas{width:100%;height:150px;display:block;touch-action:none}
 .events .row:not(.trace) .tag{color:#9cc0ff}
 .events .row .d{overflow:hidden;text-overflow:ellipsis}
 .transport{position:sticky;top:-14px;z-index:5;background:#171a1f;border:1px solid #2a2f38;border-radius:12px;padding:10px 12px;margin-bottom:12px;flex:none}
-.tbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.tbar{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;min-width:0}
 .tbar button{padding:10px 12px;font-size:15px;min-width:44px}
 .tbar button.play{background:#e8833a;color:#1a1208;min-width:86px}
 .tbar button.play.active{box-shadow:0 0 0 2px rgba(232,131,58,.35)}
 .tbar select{width:auto;padding:8px}
 .tbar label{margin:0;font-size:13px}
-.tbar .pos{margin-left:auto;font:13px ui-monospace,monospace;color:#c6ccd6;font-variant-numeric:tabular-nums}
+.tbar .pos{margin-left:auto;font:13px ui-monospace,monospace;color:#c6ccd6;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:30px;background:transparent;margin:6px 0 0;cursor:pointer}
 input[type=range]::-webkit-slider-runnable-track{height:8px;border-radius:4px;background:#2b3038}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#e8833a;margin-top:-7px;border:0}
@@ -102,13 +135,18 @@ input[type=range]:disabled{opacity:.4;cursor:default}
 <body>
 <header>
   <h1 data-i18n="ProfileReplayer">ProfileReplayer</h1>
+  <button type="button" class="fetchbtn" id="manualFetch"><span class="fetch-ico">⟳</span><span class="fetch-txt" data-i18n="抓取">抓取</span><span class="fetch-count" id="fetchCount">—</span></button>
   <select id="lang" style="width:auto;padding:6px 8px"><option value="zh">中文</option><option value="en">EN</option></select>
   <span class="status" id="status">载入中…</span>
 </header>
 <main>
 <aside>
   <fieldset><legend data-i18n="选择杯">选择杯</legend>
-    <select id="cup"><option>—</option></select>
+    <select id="cup" style="display:none"><option>—</option></select>
+    <div class="cupdrop" id="cupDrop">
+      <button type="button" class="cupdrop-btn" id="cupDropBtn" aria-haspopup="listbox" aria-expanded="false"><span class="cupdrop-label" id="cupDropLabel">—</span><span class="cupdrop-arrow">▾</span></button>
+      <div class="cupdrop-panel" id="cupDropPanel" role="listbox" hidden></div>
+    </div>
     <div class="note" id="cupInfo"></div>
   </fieldset>
   <fieldset><legend data-i18n="数据源 · Decaid 地址">数据源 · Decaid 地址</legend>
@@ -134,15 +172,15 @@ input[type=range]:disabled{opacity:.4;cursor:default}
     <div class="tbar">
       <button id="btnStart" title="开头">⏮︎</button>
       <button id="btnPrevEv" title="上一个事件">⏪︎</button>
-      <button id="btnBack10">−10</button>
-      <button id="btnBack1">−1</button>
       <button id="btnRev" class="play">◀ 倒放</button>
       <button id="btnPlay" class="play">顺放 ▶</button>
-      <button id="btnFwd1">+1</button>
-      <button id="btnFwd10">+10</button>
       <button id="btnNextEv" title="下一个事件">⏩︎</button>
       <button id="btnEnd" title="结尾">⏭︎</button>
-      <select id="speed"><option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="10">10×</option></select>
+      <select id="speed" style="display:none"><option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="10">10×</option></select>
+      <div class="cupdrop compact" id="speedDrop">
+        <button type="button" class="cupdrop-btn" id="speedDropBtn" aria-haspopup="listbox" aria-expanded="false"><span class="cupdrop-label" id="speedDropLabel">1×</span><span class="cupdrop-arrow">▾</span></button>
+        <div class="cupdrop-panel" id="speedDropPanel" role="listbox" hidden></div>
+      </div>
       <label><input type="checkbox" id="loop"> <span data-i18n="循环">循环</span></label>
       <span class="pos" id="pos">— / —</span>
     </div>

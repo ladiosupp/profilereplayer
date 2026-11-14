@@ -56,6 +56,7 @@ const EN = {
   '去 GitHub 安装': 'Install from GitHub',
   '稍后': 'Later', '重新检测': 'Re-check', '检测中…': 'Checking…',
   '插件检测失败：无法连接 Decaid': 'Plugin check failed: cannot reach Decaid',
+  '抓取': 'Fetch', '手动': 'manual',
 };
 function t(s) { return lang === 'en' && EN[s] != null ? EN[s] : s; }
 function applyLang() {
@@ -68,6 +69,8 @@ function applyLang() {
   rebuildCupListLabels();
   refreshAutoNote();
   renderStatus();
+  renderFetchCount();
+  renderWhitelistWarning();
 }
 
 // ---- IndexedDB ----
@@ -104,6 +107,9 @@ let frames = [], frameTimes = [], logTimes = [], isRaw = true;
 let idx = 0, playing = 0, speed = 1, lastTick = 0, rafId = 0, acc = 0;
 let chartsReady = false, chartGeo = [], chartBase = [], sampleTimes = [], logRows = [], lastLogHi = -1;
 let autoTimer = 0;
+let nextAutoAt = 0, countdownTimer = 0, fetching = false;
+let cupPending = null;
+let speedPending = null;
 
 const fmtT = (ms) => (ms / 1000).toFixed(2) + 's';
 const num = (v, d) => (v == null || !Number.isFinite(Number(v))) ? (d == null ? '—' : d) : Number(v);
@@ -130,7 +136,28 @@ function cupStatusLabel(result) {
 function cupOptionLabel(c) {
   const d = new Date(c.startedAt);
   const when = Number.isFinite(d.getTime()) ? (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
-  const parts = [when, c.title, cupStatusLabel(c.result)].filter(Boolean);
+  const title = cupDisplayTitle(c);
+  const parts = [when, title, cupStatusLabel(c.result)].filter(Boolean);
+  return escapeHtml(parts.join(' · '));
+}
+// 曲线名超 18 字符截断加省略号；HyperEx 杯的 (auto/on/off) 模式后缀保留，不被截掉。
+function truncName(s) { return s && s.length > 18 ? s.slice(0, 18) + '…' : s; }
+function cupDisplayTitle(c) {
+  const m = String(c.title || '').match(/^(.*) \((auto|on|off)\)$/);
+  if (m) return truncName(m[1]) + ' (' + m[2] + ')';
+  return truncName(c.title);
+}
+// 状态异常：只认明确失败语义（错误/失败/拒绝/超时/中断等），整条暗红标注；
+// recorder 正常结束是 ended (idle) 这类，不算异常。
+function cupIsBad(c) {
+  const r = String(c.result || '');
+  return /error|fail|refus|timeout|timed out|interrupted|missing|could not|pressure >|returned to idle|driver test/i.test(r);
+}
+// 下拉行标签：选中行显示完整曲线名与完整状态，其余行截断
+function cupItemLabel(c, full) {
+  const d = new Date(c.startedAt);
+  const when = Number.isFinite(d.getTime()) ? (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
+  const parts = [when, full ? c.title : cupDisplayTitle(c), full ? (c.result || '') : cupStatusLabel(c.result)].filter(Boolean);
   return escapeHtml(parts.join(' · '));
 }
 
@@ -163,16 +190,23 @@ async function fetchUrl(url) {
 async function doFetch(silent) {
   const url = $('srcUrl').value.trim();
   if (!url) { if (!silent) setStatus(() => t('失败：请填 Decaid 导出地址')); return; }
-  if (!silent) setStatus(() => t('抓取中…'), true);
+  if (fetching) return;
+  fetching = true;
+  resetAutoCountdown();
+  setFetchBusy(true);
+  if (!silent) setStatus(() => t('手动') + ' · ' + t('抓取中…'), true);
   try {
     const json = await fetchUrl(url);
     const st = await mergeIncoming(json, url);
     await dbSet('srcUrl', url);
     const rec = await fetchRecorder(url, silent);
-    setStatus(() => (silent ? t('自动抓取') + ' · ' : '') + t('新增') + ' ' + (st.newShots + rec.newShots) + ' ' + t('杯') + ' · ' + t('补全') + ' ' + (st.fullUpdated + rec.fullUpdated) + ' ' + t('杯') + (rec.note ? ' · ' + rec.note : ''));
+    setStatus(() => (silent ? t('自动抓取') + ' · ' : t('手动') + ' · ') + t('新增') + ' ' + (st.newShots + rec.newShots) + ' ' + t('杯') + ' · ' + t('补全') + ' ' + (st.fullUpdated + rec.fullUpdated) + ' ' + t('杯') + (rec.note ? ' · ' + rec.note : ''));
     await checkArchiveSize();
   } catch (e) {
     setStatus(() => (silent ? t('自动抓取失败：') : t('失败：')) + (e.message || e));
+  } finally {
+    fetching = false;
+    setFetchBusy(false);
   }
 }
 // recorder 导出地址由 HyperEx 导出地址推导（同机同端口）；404 = 未装，静默跳过。
@@ -252,10 +286,35 @@ function startAuto() {
   stopAuto();
   const sec = Math.max(5, Number($('autoSec').value) || 30);
   autoTimer = setInterval(() => doFetch(true), sec * 1000);
+  resetAutoCountdown();
   refreshAutoNote();
   if (window.HxBridge) window.HxBridge.setAutoFetch($('srcUrl').value.trim(), sec);
 }
-function stopAuto() { if (autoTimer) clearInterval(autoTimer); autoTimer = 0; if (window.HxBridge) window.HxBridge.setAutoFetch('', 0); }
+function stopAuto() { if (autoTimer) clearInterval(autoTimer); autoTimer = 0; nextAutoAt = 0; renderFetchCount(); if (window.HxBridge) window.HxBridge.setAutoFetch('', 0); }
+// 手动 / 自动抓取都把下次自动抓取计时归零重计；后台服务也同步重置。
+function resetAutoCountdown() {
+  const sec = Math.max(5, Number($('autoSec').value) || 120);
+  nextAutoAt = $('autoOn').checked ? Date.now() + sec * 1000 : 0;
+  renderFetchCount();
+  if (window.HxBridge && $('autoOn').checked) window.HxBridge.setAutoFetch($('srcUrl').value.trim(), sec);
+}
+function setFetchBusy(on) {
+  const b = $('manualFetch');
+  if (!b) return;
+  b.classList.toggle('busy', on);
+  b.disabled = on;
+}
+function renderFetchCount() {
+  const el = $('fetchCount');
+  if (!el) return;
+  if (!$('autoOn').checked || !nextAutoAt) { el.textContent = '—'; return; }
+  const remain = Math.max(0, Math.ceil((nextAutoAt - Date.now()) / 1000));
+  el.textContent = remain >= 60 ? Math.floor(remain / 60) + ':' + String(remain % 60).padStart(2, '0') : remain + 's';
+}
+function startCountdownTick() {
+  if (countdownTimer) clearInterval(countdownTimer);
+  countdownTimer = setInterval(renderFetchCount, 1000);
+}
 function refreshAutoNote() {
   const sec = Math.max(5, Number($('autoSec').value) || 120);
   const label = $('autoSec').selectedOptions[0] ? $('autoSec').selectedOptions[0].textContent : sec + 's';
@@ -281,6 +340,7 @@ function rebuildCupList() {
     sel.value = String((newestPlayable || cups[0]).index);
   }
   if (cups.length) loadCup(Number(sel.value));
+  syncCupDrop();
 }
 
 function loadCup(index) {
@@ -317,19 +377,147 @@ function rebuildCupListLabels() {
   const cur = sel.value;
   sel.innerHTML = cups.map((c) => '<option value="' + c.index + '">' + cupOptionLabel(c) + '</option>').join('');
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  syncCupDrop();
+}
+
+// ---- 自定义选杯下拉：点外部 / 再点触发都可关闭；带清晰滚动条并定位当前杯 ----
+// 底层保留隐藏原生 select（现有 change 逻辑与回归脚本兼容），这里只做展示与交互。
+function syncCupDrop() {
+  const sel = $('cup');
+  const label = $('cupDropLabel');
+  const panel = $('cupDropPanel');
+  if (!label || !panel) return;
+  const cur = sel.value;
+  const curOpt = [...sel.options].find((o) => o.value === cur);
+  label.textContent = curOpt ? curOpt.textContent : '—';
+  const active = cupPending != null ? String(cupPending) : cur;
+  panel.innerHTML = cups.map((c) => '<div class="cupdrop-item' + (String(c.index) === active ? ' sel' : '') + (cupIsBad(c) ? ' bad' : '') + '" role="option" data-index="' + c.index + '" aria-selected="' + (String(c.index) === cur) + '">' + cupItemLabel(c, String(c.index) === active) + '</div>').join('');
+  panel.querySelectorAll('.cupdrop-item').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      // 行点击会重建面板（节点脱离文档），不阻断冒泡会被「点外关闭」误判
+      ev.stopPropagation();
+      // 两段式：第一次点击高亮并显示完整信息，再次点击同一行才确定加载
+      if (cupPending === Number(el.dataset.index)) {
+        cupPending = null;
+        sel.value = el.dataset.index;
+        sel.dispatchEvent(new Event('change'));
+        closeCupDrop();
+        syncCupDrop();
+      } else {
+        cupPending = Number(el.dataset.index);
+        syncCupDrop();
+      }
+    });
+  });
+  if (!$('cupDrop').classList.contains('open')) return;
+  const selEl = panel.querySelector('.cupdrop-item.sel');
+  if (selEl) selEl.scrollIntoView({ block: 'nearest' });
+}
+function openCupDrop() {
+  const drop = $('cupDrop'), panel = $('cupDropPanel'), btn = $('cupDropBtn');
+  cupPending = null;
+  closeSpeedDrop();
+  syncCupDrop();
+  drop.classList.add('open');
+  panel.hidden = false;
+  btn.setAttribute('aria-expanded', 'true');
+  const selEl = panel.querySelector('.cupdrop-item.sel');
+  if (selEl) selEl.scrollIntoView({ block: 'center' });
+}
+function closeCupDrop() {
+  const drop = $('cupDrop'), panel = $('cupDropPanel'), btn = $('cupDropBtn');
+  if (!drop) return;
+  cupPending = null;
+  drop.classList.remove('open');
+  panel.hidden = true;
+  btn.setAttribute('aria-expanded', 'false');
+}
+function initCupDrop() {
+  const btn = $('cupDropBtn'), drop = $('cupDrop');
+  if (!btn || !drop) return;
+  btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (drop.classList.contains('open')) closeCupDrop(); else openCupDrop();
+  });
+  initSpeedDrop();
+  document.addEventListener('click', (ev) => {
+    if (drop.classList.contains('open') && !drop.contains(ev.target)) closeCupDrop();
+    const sd = $('speedDrop');
+    if (sd && sd.classList.contains('open') && !sd.contains(ev.target)) closeSpeedDrop();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { if (drop.classList.contains('open')) closeCupDrop(); closeSpeedDrop(); }
+  });
+}
+
+// ---- 倍速下拉：与选杯同口径（隐藏原生 select + 两段式 + 点外/再点/ESC 关闭）----
+function syncSpeedDrop() {
+  const sel = $('speed'), label = $('speedDropLabel'), panel = $('speedDropPanel');
+  if (!label || !panel) return;
+  const cur = sel.value;
+  const curOpt = [...sel.options].find((o) => o.value === cur);
+  label.textContent = curOpt ? curOpt.textContent : '1×';
+  const active = speedPending != null ? String(speedPending) : cur;
+  panel.innerHTML = [...sel.options].map((o) => '<div class="cupdrop-item' + (o.value === active ? ' sel' : '') + '" role="option" data-value="' + o.value + '" aria-selected="' + (o.value === cur) + '">' + escapeHtml(o.textContent) + '</div>').join('');
+  panel.querySelectorAll('.cupdrop-item').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (speedPending === el.dataset.value) {
+        speedPending = null;
+        sel.value = el.dataset.value;
+        sel.dispatchEvent(new Event('change'));
+        closeSpeedDrop();
+        syncSpeedDrop();
+      } else {
+        speedPending = el.dataset.value;
+        syncSpeedDrop();
+      }
+    });
+  });
+}
+function openSpeedDrop() {
+  const drop = $('speedDrop'), panel = $('speedDropPanel'), btn = $('speedDropBtn');
+  if (!drop) return;
+  speedPending = null;
+  closeCupDrop();
+  syncSpeedDrop();
+  drop.classList.add('open');
+  panel.hidden = false;
+  btn.setAttribute('aria-expanded', 'true');
+  const selEl = panel.querySelector('.cupdrop-item.sel');
+  if (selEl) selEl.scrollIntoView({ block: 'nearest' });
+}
+function closeSpeedDrop() {
+  const drop = $('speedDrop'), panel = $('speedDropPanel'), btn = $('speedDropBtn');
+  if (!drop) return;
+  speedPending = null;
+  drop.classList.remove('open');
+  panel.hidden = true;
+  btn.setAttribute('aria-expanded', 'false');
+}
+function initSpeedDrop() {
+  const btn = $('speedDropBtn'), drop = $('speedDrop');
+  if (!btn || !drop) return;
+  btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (drop.classList.contains('open')) closeSpeedDrop(); else openSpeedDrop();
+  });
+  syncSpeedDrop();
 }
 
 function renderCupInfo() {
   const c = cup;
   const stageLine = (name, s) => (!s || s.rawRegressionGS == null) ? name + ' —' : name + ' ' + f2(s.rawRegressionGS) + ' g/s (' + t('目标') + ' ' + s.targetGS + ' · ' + (s.status || '') + ')';
+  // 非 HyperEx 杯（recorder，runId pr- 前缀）没有 S1/S2/S3 控制段，不显示
+  const isPr = String(c.runId || '').startsWith('pr-');
   $('cupInfo').innerHTML =
     '<div>runId ' + (c.runId || '—') + '</div>' +
     '<div>' + t('插件') + ' ' + (c.pluginVersion || '—') + ' · ' + (c.startedAt || '') + '</div>' +
     '<div>' + t('结果') + ' ' + (c.result || '—') + '</div>' +
-    '<div style="margin-top:6px">' + stageLine('S1', c.s1) + '</div><div>' + stageLine('S2', c.s2) + '</div><div>' + stageLine('S3', c.s3) + '</div>';
+    (isPr ? '' : '<div style="margin-top:6px">' + stageLine('S1', c.s1) + '</div><div>' + stageLine('S2', c.s2) + '</div><div>' + stageLine('S3', c.s3) + '</div>');
 }
 function setTransportEnabled(on) {
-  for (const id of ['btnStart', 'btnPrevEv', 'btnBack10', 'btnBack1', 'btnRev', 'btnPlay', 'btnFwd1', 'btnFwd10', 'btnNextEv', 'btnEnd']) $(id).disabled = !on;
+  for (const id of ['btnStart', 'btnPrevEv', 'btnRev', 'btnPlay', 'btnNextEv', 'btnEnd']) $(id).disabled = !on;
 }
 
 // ---- 播放引擎 ----
@@ -609,7 +797,32 @@ function buildCharts() {
       stop(); seek(nearestFrame(t * 1000));
     };
     g.canvas.onclick = (ev) => locate(ev.clientX);
-    g.canvas.ontouchstart = (ev) => { if (ev.touches.length === 1) { locate(ev.touches[0].clientX); ev.preventDefault(); } };
+    // 触屏：竖向滑动交给页面原生滚动（canvas touch-action:pan-y），
+    // 只有点按（位移<10px）或横向拖动才移动时间轴；横拖时阻止默认避免误滚。
+    let ts = null;
+    g.canvas.addEventListener('touchstart', (ev) => {
+      if (ev.touches.length !== 1) { ts = null; return; }
+      const t0 = ev.touches[0];
+      ts = { x: t0.clientX, y: t0.clientY, mode: null };
+    }, { passive: true });
+    g.canvas.addEventListener('touchmove', (ev) => {
+      if (!ts || ev.touches.length !== 1) return;
+      const t0 = ev.touches[0];
+      const dx = t0.clientX - ts.x, dy = t0.clientY - ts.y;
+      if (!ts.mode) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        ts.mode = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v';
+      }
+      if (ts.mode === 'h') { ev.preventDefault(); locate(t0.clientX); }
+    }, { passive: false });
+    g.canvas.addEventListener('touchend', (ev) => {
+      if (ts && !ts.mode) {
+        const t0 = ev.changedTouches[0];
+        if (t0 && Math.abs(t0.clientX - ts.x) < 10 && Math.abs(t0.clientY - ts.y) < 10) locate(t0.clientX);
+      }
+      ts = null;
+    }, { passive: true });
+    g.canvas.addEventListener('touchcancel', () => { ts = null; }, { passive: true });
   }
 }
 function drawCursor() {
@@ -646,6 +859,7 @@ function drawCursor() {
 
 // ---- 事件绑定 ----
 $('fetchNow').addEventListener('click', () => doFetch(false));
+$('manualFetch').addEventListener('click', () => doFetch(false));
 $('autoOn').addEventListener('change', () => { if ($('autoOn').checked) { startAuto(); doFetch(true); } else stopAuto(); dbSet('autoOn', $('autoOn').checked); });
 $('autoSec').addEventListener('change', () => { dbSet('autoSec', $('autoSec').value); if ($('autoOn').checked) startAuto(); else if (window.HxBridge) window.HxBridge.setAutoFetch($('srcUrl').value.trim(), Number($('autoSec').value)); });
 $('pickFile').addEventListener('click', () => $('fileInput').click());
@@ -682,10 +896,6 @@ $('lang').addEventListener('change', () => { lang = $('lang').value; dbSet('lang
 $('cup').addEventListener('change', () => loadCup(Number($('cup').value)));
 $('btnPlay').addEventListener('click', () => play(1));
 $('btnRev').addEventListener('click', () => play(-1));
-$('btnBack1').addEventListener('click', () => step(-1));
-$('btnFwd1').addEventListener('click', () => step(1));
-$('btnBack10').addEventListener('click', () => step(-10));
-$('btnFwd10').addEventListener('click', () => step(10));
 $('btnStart').addEventListener('click', () => { stop(); seek(0); });
 $('btnEnd').addEventListener('click', () => { stop(); seek(frames.length - 1); });
 $('btnPrevEv').addEventListener('click', () => jumpEvent(-1));
@@ -846,6 +1056,10 @@ function renderWhitelistWarning() {
     bar.appendChild(msg); bar.appendChild(btn);
     const main = document.querySelector('main');
     document.body.insertBefore(bar, main);
+  } else {
+    // 切语言时刷新已存在的警示条文案
+    bar.querySelector('span').textContent = t('后台抓取未在白名单') + '，' + t('可能被系统杀掉，后台抓取会停。');
+    bar.querySelector('button').textContent = t('去设置白名单');
   }
 }
 
@@ -861,6 +1075,7 @@ function renderWhitelistWarning() {
   if (savedLang === 'en' || savedLang === 'zh') { lang = savedLang; $('lang').value = lang; }
   applyChartOrder(await dbGet('chartOrder'));
   initChartDrag();
+  initCupDrop();
   if (window.HxBridge) {
     await mergePending();
     window.HxBridge.setAutoFetch($('srcUrl').value.trim(), $('autoOn').checked ? Number($('autoSec').value) : 0);
@@ -871,6 +1086,7 @@ function renderWhitelistWarning() {
   renderArchiveInfo();
   rebuildCupList();
   if (await dbGet('autoOn')) { $('autoOn').checked = true; startAuto(); }
+  startCountdownTick();
   applyLang();
   renderWhitelistWarning();
   renderReadyStatus();
